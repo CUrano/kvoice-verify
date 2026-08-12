@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Claves publicas de firma de KVoice, ancladas localmente (pinning).",
+    "Este fichero es la RAIZ DE CONFIANZA del verificador: si se obtiene la",
+    "clave de la propia API de KVoice, verificar no demuestra nada frente a un",
+    "operador hostil, porque quien firma es quien dice con que comprobarlo.",
+    "",
+    "Contrastalo con docs/ACTA_PUBLIC_KEYS.md y, mejor aun, con una fuente que",
+    "no controle KVoice (repositorio publico, archive.org, copia de un tercero).",
+    "",
+    "Las claves retiradas NO se borran: sin ellas, lo firmado en su dia deja de",
+    "poder verificarse."
+  ],
+  "keys": {
+    "acta-v1": {
+      "algorithm": "ed25519",
+      "public_key_hex": "4e6ec15adb67bef0545e3bc0cc4b07a6336dc5c8c95d5f692ccdbb29b807435b",
+      "valid_from": "2026-08-11",
+      "status": "active",
+      "note": "Primera clave estable. Las firmas anteriores al 11/08/2026 se emitieron con claves efimeras distintas por arranque y por replica: NO son verificables."
+    }
+  },
+  "telos": {
+    "chain_id": "4667b205c6838ef70ff7988f6e8257e8be0e1284a2f59699054a018f743b1d11",
+    "chain_name": "Telos mainnet",
+    "anchor_contract": "icaronutriti",
+    "anchors_table": "anchors",
+    "note": "El chain_id se comprueba contra el nodo consultado: evita que un nodo de testnet o una cadena falsa se presente como mainnet."
+  }
+}

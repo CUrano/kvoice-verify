@@ -1,0 +1,12 @@
+# Verificador independiente de KVoice.
+#
+# Una sola dependencia, y a proposito: cuantas menos librerias, mas facil
+# es que alguien audite este programa de arriba abajo. El resto (HTTP,
+# JSON, SHA-256) sale de la libreria estandar de Python.
+#
+# Requiere Python 3.10 o superior.
+
+PyNaCl>=1.5.0
+
+# Solo para ejecutar los tests:
+#   pip install pytest
