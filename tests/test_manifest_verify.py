@@ -420,12 +420,94 @@ def test_firma_organizador_invalida_falla(trust):
 
 
 def test_organizador_valido_se_reporta_como_no_anclado(trust):
-    """La pubkey del organizador NO esta en el contenido anclado: el informe
-    debe decirlo en vez de venderlo como garantia."""
+    """Manifest anterior a 0055 (sin bloque `organizer` en el payload): la
+    firma solo puede verificarse con la clave declarada y el informe debe
+    decirlo en vez de venderlo como garantia."""
     report = run_offline(make_full(make_payload()), trust)
     org = [c for c in report.checks if c.name == "firma organizador"][0]
     assert org.passed
     assert "NO anclada" in org.trust
+
+
+# ---------------------------------------------------------------------------
+# Firmas: organizador con clave anclada en el payload (0055)
+# ---------------------------------------------------------------------------
+
+
+def payload_with_anchored_org(**kw) -> dict:
+    """Payload 0055: bloque `organizer` DENTRO del contenido anclado."""
+    payload = make_payload(**kw)
+    payload["organizer"] = {"ed25519_pubkey_hex": ORGANIZER_PUB}
+    return payload
+
+
+def test_organizador_anclado_valido_pasa(trust):
+    report = run_offline(make_full(payload_with_anchored_org()), trust)
+    assert report.ok
+    org = [c for c in report.checks if c.name == "firma organizador"][0]
+    assert org.passed
+    assert "DENTRO del contenido" in org.detail
+    assert "anclada dentro del contenido" in org.trust
+
+
+def test_organizador_anclado_clave_declarada_distinta_falla(trust):
+    """El bloque de firmas declara otra pubkey que la anclada: la anclada
+    manda y la discrepancia es un fallo, no una advertencia."""
+    full = make_full(payload_with_anchored_org())
+    otra = SigningKey(bytes.fromhex("55" * 32))
+    full["signatures"]["organizer"]["pubkey_hex"] = bytes(otra.verify_key).hex()
+    report = run_offline(full, trust)
+    assert any(
+        c.name == "firma organizador" and not c.passed for c in report.checks
+    )
+
+
+def test_organizador_anclado_firma_de_impostor_falla(trust):
+    """Firma de otra clave aunque declare la pubkey anclada correcta."""
+    payload = payload_with_anchored_org()
+    full = make_full(payload)
+    impostor = SigningKey(bytes.fromhex("66" * 32))
+    full["signatures"]["organizer"]["signature_hex"] = impostor.sign(
+        manifest_hash(payload)
+    ).signature.hex()
+    report = run_offline(full, trust)
+    assert any(
+        c.name == "firma organizador" and not c.passed for c in report.checks
+    )
+
+
+def test_organizador_anclado_sustituir_clave_rompe_hash(trust):
+    """Editar la clave anclada del payload cambia el hash: el envoltorio
+    (que declara el hash original) deja de cuadrar. Esta es exactamente la
+    garantia que motiva anclar la clave."""
+    full = make_full(payload_with_anchored_org())
+    doc = make_wrapper(full)
+    otra = SigningKey(bytes.fromhex("77" * 32))
+    doc["manifest_full"]["organizer"] = {
+        "ed25519_pubkey_hex": bytes(otra.verify_key).hex()
+    }
+    report = run_offline(doc, trust)
+    assert any(c.name == "hash" and not c.passed for c in report.checks)
+
+
+def test_organizador_bloque_anclado_corrupto_falla_sin_downgrade(trust):
+    """Bloque `organizer` presente pero invalido: fallo explicito y sin
+    caer al regimen legacy de clave declarada (seria un downgrade)."""
+    payload = make_payload()
+    payload["organizer"] = {"ed25519_pubkey_hex": "zz" * 32}
+    full = make_full(payload)
+    report = run_offline(full, trust)
+    entradas = [c for c in report.checks if c.name == "firma organizador"]
+    assert len(entradas) == 1
+    assert not entradas[0].passed
+
+
+def test_organizador_anclado_sin_firma_falla(trust):
+    full = make_full(payload_with_anchored_org(), with_organizer=False)
+    report = run_offline(full, trust)
+    org = [c for c in report.checks if c.name == "firma organizador"][0]
+    assert not org.passed
+    assert "falta su firma" in org.detail
 
 
 # ---------------------------------------------------------------------------

@@ -51,16 +51,17 @@ Telos con `batch_index = 0` (reservado para manifests).
     1. Hash del contenido            recalculado aqui
     2. Firma del servidor            clave anclada en disco
     3. Firmas de los N custodios     claves DENTRO del contenido anclado (*)
-    4. Firma del organizador         clave declarada en el documento
+    4. Firma del organizador         clave DENTRO del contenido anclado (*)
     5. Hash en la cadena             nodo publico de Telos
     6. Irreversibilidad              nodo publico de Telos
 
-    (*) Las pubkeys Ed25519 de los custodios forman parte del payload
-        cuyo hash esta en la cadena: sustituir una cambia el hash y el
-        anclaje deja de cuadrar. La del organizador NO esta en el payload:
-        se verifica con la clave que declara el propio documento, asi que
-        identifica al organizador solo si esa clave se conoce por otra
-        via. El informe lo dice explicitamente.
+    (*) Las pubkeys Ed25519 de custodios y organizador forman parte del
+        payload cuyo hash esta en la cadena: sustituir una cambia el hash
+        y el anclaje deja de cuadrar. El bloque `organizer` del payload
+        existe desde la migracion 0055 del backend; en manifests
+        anteriores la firma del organizador solo puede verificarse con la
+        clave que declara el propio documento (consistencia interna, no
+        identidad) y el informe lo dice explicitamente.
 
 El fichero de entrada es la respuesta JSON de
 `GET /v1/votings/{id}/manifest` (o su campo `manifest_full` suelto).
@@ -793,9 +794,11 @@ def check_manifest_signatures(
       (`crypto.custodians[*].ed25519_pubkey_hex`), cubiertas por el hash
       anclado: sustituir una clave cambia el hash y el paso de cadena
       falla. Se exige el umbral n completo y claves distintas.
-    - Organizador: su pubkey NO esta en el payload; se verifica con la que
-      declara el propio bloque de firmas y se dice claramente que eso solo
-      demuestra consistencia interna, no identidad.
+    - Organizador: desde la migracion 0055 su pubkey viene DENTRO del
+      payload (`organizer.ed25519_pubkey_hex`) y se verifica contra ella,
+      igual que los custodios. En manifests anteriores (sin ese bloque) se
+      verifica con la clave que declara el propio bloque de firmas y se
+      dice claramente que eso solo demuestra consistencia interna.
     """
     ok = True
 
@@ -856,9 +859,44 @@ def check_manifest_signatures(
     crypto = payload.get("crypto")
 
     # --- Organizador --------------------------------------------------------
+    # 0055+: la pubkey del organizador viene DENTRO del payload
+    # (`organizer.ed25519_pubkey_hex`), cubierta por el hash anclado como
+    # las de los custodios. Manifests anteriores no traen el bloque y se
+    # verifican con la clave declarada, avisando de la diferencia.
+    anchored_org_pk = ""
+    org_corrupt = False
+    org_block = payload.get("organizer")
+    if org_block is not None:
+        if isinstance(org_block, dict):
+            anchored_org_pk = (
+                str(org_block.get("ed25519_pubkey_hex") or "").strip().lower()
+            )
+        if len(anchored_org_pk) != 64 or any(
+            c not in "0123456789abcdef" for c in anchored_org_pk
+        ):
+            # Bloque presente pero corrupto: fallo explicito, nunca caer
+            # en silencio al regimen legacy (seria un downgrade).
+            ok = report.add(
+                "firma organizador",
+                False,
+                "el payload trae bloque `organizer` pero sin una "
+                "`ed25519_pubkey_hex` valida (64 hex): documento incoherente",
+            )
+            anchored_org_pk = ""
+            org_corrupt = True
+
     organizer = signatures.get("organizer")
-    if not isinstance(organizer, dict):
-        if crypto:
+    if org_corrupt:
+        pass  # ya reportado; no re-evaluar con regimen legacy
+    elif not isinstance(organizer, dict):
+        if anchored_org_pk:
+            ok = report.add(
+                "firma organizador",
+                False,
+                "el payload ancla la clave del organizador pero falta su "
+                "firma: el backend no ancla un manifest asi",
+            )
+        elif crypto:
             ok = report.add(
                 "firma organizador",
                 False,
@@ -872,6 +910,38 @@ def check_manifest_signatures(
                 "ausente: regimen server-only de votaciones sin custodios "
                 "(deuda documentada en el backend, no un fallo del documento)",
             )
+    elif anchored_org_pk:
+        declared_pk = (organizer.get("pubkey_hex") or "").strip().lower()
+        if declared_pk and declared_pk != anchored_org_pk:
+            ok = report.add(
+                "firma organizador",
+                False,
+                "la pubkey que declara el bloque de firmas NO es la anclada "
+                "dentro del contenido.\n"
+                f"      declarada: {declared_pk}\n"
+                f"      anclada:   {anchored_org_pk}",
+                trust="clave anclada dentro del contenido",
+            )
+        else:
+            error = _verify_over_hash(
+                anchored_org_pk, organizer.get("signature_hex") or "", m_hash
+            )
+            if error:
+                ok = report.add(
+                    "firma organizador",
+                    False,
+                    error,
+                    trust="clave anclada dentro del contenido",
+                )
+            else:
+                report.add(
+                    "firma organizador",
+                    True,
+                    "firma valida con la clave anclada DENTRO del contenido: "
+                    "sustituirla cambiaria el hash y el anclaje dejaria de "
+                    "cuadrar, igual que con los custodios",
+                    trust="clave anclada dentro del contenido anclado en Telos",
+                )
     else:
         declared_pk = (organizer.get("pubkey_hex") or "").strip().lower()
         error = _verify_over_hash(
@@ -883,9 +953,10 @@ def check_manifest_signatures(
             report.add(
                 "firma organizador",
                 True,
-                "firma valida con la clave que declara el documento. OJO: esa "
-                "clave NO esta dentro del contenido anclado; identifica al "
-                "organizador solo si la conoces por otra via",
+                "firma valida con la clave que declara el documento (manifest "
+                "anterior a 0055). OJO: esa clave NO esta dentro del contenido "
+                "anclado; identifica al organizador solo si la conoces por "
+                "otra via",
                 trust="clave declarada en el propio documento (NO anclada)",
             )
 

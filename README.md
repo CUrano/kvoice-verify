@@ -42,18 +42,19 @@ organizador + N custodios y anclado en Telos (`batch_index = 0`).
 | 1. Hash | SHA-256 del JSON canónico del contenido | recalculado aquí | **No** |
 | 2. Firma servidor | Ed25519 sobre los bytes del hash | `trusted_keys.json` | **No** |
 | 3. Firmas custodios | umbral n completo, claves distintas | claves **dentro** del contenido anclado | **No** (*) |
-| 4. Firma organizador | Ed25519 sobre el hash | clave declarada en el documento | **Parcial** (**) |
+| 4. Firma organizador | Ed25519 sobre el hash | clave **dentro** del contenido anclado | **No** (*) (**) |
 | 5. Cadena | el hash está en `anchors`, batch 0 | nodo público de Telos | **No** |
 | 6. Irreversible | `anchored_at` ≤ último bloque irreversible | nodo público de Telos | **No** |
 
-(*) Las pubkeys Ed25519 de los custodios forman parte del contenido cuyo
-hash está en la cadena: sustituir una clave cambia el hash y el paso 5
-falla. Lo que **no** dice la cadena es quién es cada custodio en el mundo
-real: eso es una relación off-chain.
+(*) Las pubkeys Ed25519 de custodios y organizador forman parte del
+contenido cuyo hash está en la cadena: sustituir una clave cambia el hash
+y el paso 5 falla. Lo que **no** dice la cadena es quién es cada uno en el
+mundo real: eso es una relación off-chain.
 
-(**) La pubkey del organizador **no** está dentro del contenido anclado;
-solo demuestra consistencia interna del documento, y el informe lo dice
-tal cual. Anclarla es una mejora pendiente del backend.
+(**) El bloque `organizer` del payload existe desde la migración 0055 del
+backend. En manifests anteriores la firma del organizador solo puede
+verificarse con la clave que declara el propio documento (consistencia
+interna, no identidad) y el informe lo dice tal cual.
 
 **La pieza clave es `trusted_keys.json`.** El verificador usa la clave de
 ese fichero, **nunca** la que viene dentro del recibo ni la que sirve la
@@ -163,7 +164,7 @@ pip install pytest
 python -m pytest tests/ -q
 ```
 
-84 tests. Además de los casos válidos, cubren el rechazo de: payload
+90 tests. Además de los casos válidos, cubren el rechazo de: payload
 alterado, firma con un bit cambiado, firma de otra clave, pubkey declarada
 distinta de la anclada, `kid` desconocido, recibo sin firmar, `typ` de otro
 dominio, campo inyectado en el payload, raíz que no cuadra, hermano Merkle
@@ -174,7 +175,11 @@ contenido alterado tras firmar, hash declarado falso, envoltorio
 divergente, firma sobre el mensaje equivocado (JSON en vez del hash),
 clave de custodio ajena al manifest, firma de custodio duplicada, umbral
 incompleto, organizador ausente, firmas de custodio en votaciones sin
-custodios, hash ausente del batch 0 y anclaje aún reversible.
+custodios, hash ausente del batch 0 y anclaje aún reversible. Para la
+clave anclada del organizador (0055): firma de impostor, pubkey declarada
+distinta de la anclada, clave sustituida en el payload (rompe el hash),
+bloque `organizer` corrupto sin downgrade al régimen legacy y clave
+anclada sin firma.
 
 Un verificador solo probado con entradas válidas no sirve: lo único que
 importa es que diga **no** cuando toca.
