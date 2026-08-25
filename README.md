@@ -1,7 +1,8 @@
 # kvoice-verify — Verificador independiente de KVoice
 
 Comprueba que un recibo de voto es auténtico y que quedó incluido en un
-lote anclado en Telos — **sin tener que fiarte de KVoice**.
+lote anclado en Telos, y que un manifest electoral multi-firma es el que
+se ancló antes de abrir la votación — **sin tener que fiarte de KVoice**.
 
 Este repositorio se publica separado del sistema a propósito: un
 verificador que se descarga del mismo sitio que el software verificado
@@ -29,6 +30,31 @@ que lo compruebas. Este programa rompe el círculo.
 (*) La prueba la sirve KVoice, pero es autoverificable: si la manipula, la
 raíz que sale no coincide con la que está en la cadena.
 
+### Manifests electorales
+
+El mismo programa verifica el **manifest** de una votación: el documento
+que fija preguntas, censo declarado, custodios, umbral k-de-n y
+commitments de las shares **antes de abrirse**, firmado por servidor +
+organizador + N custodios y anclado en Telos (`batch_index = 0`).
+
+| Paso | Qué verifica | Fuente de verdad | ¿Puede KVoice mentir? |
+|------|--------------|------------------|------------------------|
+| 1. Hash | SHA-256 del JSON canónico del contenido | recalculado aquí | **No** |
+| 2. Firma servidor | Ed25519 sobre los bytes del hash | `trusted_keys.json` | **No** |
+| 3. Firmas custodios | umbral n completo, claves distintas | claves **dentro** del contenido anclado | **No** (*) |
+| 4. Firma organizador | Ed25519 sobre el hash | clave declarada en el documento | **Parcial** (**) |
+| 5. Cadena | el hash está en `anchors`, batch 0 | nodo público de Telos | **No** |
+| 6. Irreversible | `anchored_at` ≤ último bloque irreversible | nodo público de Telos | **No** |
+
+(*) Las pubkeys Ed25519 de los custodios forman parte del contenido cuyo
+hash está en la cadena: sustituir una clave cambia el hash y el paso 5
+falla. Lo que **no** dice la cadena es quién es cada custodio en el mundo
+real: eso es una relación off-chain.
+
+(**) La pubkey del organizador **no** está dentro del contenido anclado;
+solo demuestra consistencia interna del documento, y el informe lo dice
+tal cual. Anclarla es una mejora pendiente del backend.
+
 **La pieza clave es `trusted_keys.json`.** El verificador usa la clave de
 ese fichero, **nunca** la que viene dentro del recibo ni la que sirve la
 API. Si no coinciden, falla y te dice por qué. Contrasta esa clave con la
@@ -45,6 +71,9 @@ Conviene ser exacto, porque es fácil vender esto de más:
 - **No** demuestra que el recuento corresponda a los votos cifrados. Eso
   exige recuento homomórfico con pruebas Chaum-Pedersen, que todavía no
   existe (ver la revisión criptográfica en el repositorio de KVoice).
+- En manifests: **no** demuestra la identidad real de organizador y
+  custodios, solo que las claves comprometidas en el contenido anclado
+  firmaron ese contenido exacto.
 
 Es decir: **verificabilidad individual, no universal.**
 
@@ -54,12 +83,19 @@ Es decir: **verificabilidad individual, no universal.**
 pip install -r requirements.txt
 
 python kvoice_verify.py recibo.json
-python kvoice_verify.py recibo.json --offline    # solo la firma, sin red
-python kvoice_verify.py recibo.json --json       # para automatizar
+python kvoice_verify.py manifest.json
+python kvoice_verify.py documento.json --offline # sin red (firmas y hash)
+python kvoice_verify.py documento.json --json    # para automatizar
 ```
 
-`recibo.json` es el fichero que descarga la app desde el detalle de la
-votación. También acepta un objeto `signed_receipt` suelto.
+El tipo de documento se detecta solo:
+
+- `recibo.json` es el fichero que descarga la app desde el detalle de la
+  votación. También acepta un objeto `signed_receipt` suelto.
+- `manifest.json` es la respuesta de `GET /v1/votings/{id}/manifest`
+  (requiere sesión con acceso a la votación) o su campo `manifest_full`
+  suelto. La verificación del manifest no necesita la API de KVoice para
+  nada: con el fichero y un nodo de Telos basta.
 
 Opciones útiles:
 
@@ -109,6 +145,13 @@ Si cambias el backend, esto tiene que cambiar a la vez o nada verificará:
 - **Recibo**: la firma cubre el **JSON canónico directamente**.
 - **Acta**: la firma cubre el **SHA-256** del JSON canónico. *No es lo
   mismo que el recibo*, y confundirlos es el error más fácil de cometer.
+- **Manifest**: JSON canónico con `ensure_ascii=True` (¡al contrario que
+  el recibo!) y las firmas cubren los **32 bytes del hash**, no el JSON.
+  El hash nunca se toma del documento: se recalcula siempre del contenido.
+- **Anclaje del manifest**: `batch_index = 0` reservado en el contrato
+  `kvoiceanchor`, `leaf_count = 1`. La irreversibilidad se decide
+  comparando el `anchored_at` on-chain de la fila (timestamp del bloque
+  que la escribió) con el timestamp del último bloque irreversible.
 
 Los tests replican el algoritmo del backend y comparan resultados, así que
 una divergencia sale como fallo en vez de como misterio.
@@ -120,13 +163,18 @@ pip install pytest
 python -m pytest tests/ -q
 ```
 
-47 tests. Además de los casos válidos, cubren el rechazo de: payload
+84 tests. Además de los casos válidos, cubren el rechazo de: payload
 alterado, firma con un bit cambiado, firma de otra clave, pubkey declarada
 distinta de la anclada, `kid` desconocido, recibo sin firmar, `typ` de otro
 dominio, campo inyectado en el payload, raíz que no cuadra, hermano Merkle
 manipulado, lados L/R invertidos, prueba de otro commitment, nodo de otra
 cadena, raíz distinta en la cadena, lote ausente, backend `local`,
-`leaf_count` incoherente y anclaje aún reversible.
+`leaf_count` incoherente y anclaje aún reversible. Para manifests:
+contenido alterado tras firmar, hash declarado falso, envoltorio
+divergente, firma sobre el mensaje equivocado (JSON en vez del hash),
+clave de custodio ajena al manifest, firma de custodio duplicada, umbral
+incompleto, organizador ausente, firmas de custodio en votaciones sin
+custodios, hash ausente del batch 0 y anclaje aún reversible.
 
 Un verificador solo probado con entradas válidas no sirve: lo único que
 importa es que diga **no** cuando toca.
